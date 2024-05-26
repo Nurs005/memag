@@ -11,7 +11,8 @@ contract DoggyAiStake is Ownable {
     uint256 public minStake = 10 * 10 ** 18;
     uint256 internal stakePeriod;
     uint256 public totalStaked;
-    uint totalFund;
+    uint public constantTotalFunds;
+    uint public totalFund;
 
     event Staked(address indexed, uint256 amount);
     event Claimed(address indexed, uint256 amount);
@@ -43,7 +44,8 @@ contract DoggyAiStake is Ownable {
         rewardRate = 20;
         isEarlyWithdral = false;
         stakePeriod = _stakePeriod * 1 days;
-        totalFund = 13800000000000000000000000000;
+        constantTotalFunds = 13800000000000000000000000000;
+        totalFund = constantTotalFunds;
     }
 
     function getStakes(
@@ -57,7 +59,7 @@ contract DoggyAiStake is Ownable {
         address userAddress,
         uint256 stakeIndex
     ) public view returns (uint256) {
-        Stake memory userStake = stakes[userAddress][stakeIndex];
+        Stake storage userStake = stakes[userAddress][stakeIndex];
         uint256 elapsedSeconds = block.timestamp - userStake.lastClaimTimestamp;
         if (userTotalStaked[msg.sender] == totalStaked) {
             return ((userStake.amount * elapsedSeconds * rewardRate) /
@@ -94,10 +96,14 @@ contract DoggyAiStake is Ownable {
         emit Staked(msg.sender, _amount);
     }
 
+    function calculatePoolProcentage() public view returns (uint256) {
+        return (totalFund / constantTotalFunds) * 100;
+    }
+
     function claimReward(uint256 stakeIndex) internal {
         stakes[msg.sender][stakeIndex].lastClaimTimestamp = block.timestamp;
         uint256 rewardAmount = calculateReward(msg.sender, stakeIndex);
-        require(totalFund >= rewardAmount, "Staking is empty");
+        require(rewardAmount <= totalFund, "Staking is empty");
         require(
             stakingToken.transfer(msg.sender, rewardAmount),
             "Token transfer failed"
@@ -119,12 +125,9 @@ contract DoggyAiStake is Ownable {
         uint i;
         for (i; i < userStake.length; i++) {
             require(isEarlyWithdral, "Early withdrawal is not allowed");
-
             uint256 rewardAmount = calculateReward(msg.sender, i);
-
-            require(userStake[i].amount > 0, "Stake is empty");
             require(
-                totalFund >= userStake[i].amount + rewardAmount,
+                userStake[i].amount + rewardAmount < totalFund,
                 "Staking is empty"
             );
 
@@ -159,6 +162,8 @@ contract DoggyAiStake is Ownable {
         stakePeriod = newStakePeriod * 1 days;
         setMinStake(minStake);
         rewardRate = newProcent;
+        constantTotalFunds = amountToRefil;
+        totalFund = constantTotalFunds;
         emit PoolRefild(
             msg.sender,
             amountToRefil,
