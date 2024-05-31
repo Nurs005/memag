@@ -21,6 +21,7 @@ contract DoggyAiPresale is Ownable, ReentrancyGuard {
     bool public isSaleStart;
     bool public isSaleEnd;
     uint256 public tokenPriceUSDT;
+    uint256 public endDate;
     uint256 public minPurchaseAmount = 1;
     uint8 public stage = 1;
     uint256 public minWei = 100000000000;
@@ -29,13 +30,13 @@ contract DoggyAiPresale is Ownable, ReentrancyGuard {
     mapping(address => uint256) private _lastClaimTime;
 
     event BuyTokens(address indexed addr, uint256 amount);
-    event SaleStatusChanged(bool newStatus);
     event PriceUpdated(uint256 newPrice);
     event MinPurchaseAmountChanged(uint256 newMinPurchaseAmount);
-    event SaleStarded(bool isSaleStarted);
+    event SaleStarted(bool isSaleStarted);
 
-    uint256[15] public priceStruct;
-    uint256[15] public stagePeriods;
+    uint256[] public priceStruct;
+    uint256[] public stagePeriods;
+    //This is the value I use to measure whether we have reached a certain target for price change, this is the volume used for tokenomics stage switching.
     uint constantValue = 714285710000;
 
     constructor(
@@ -52,55 +53,54 @@ contract DoggyAiPresale is Ownable, ReentrancyGuard {
     }
 
     function initializeStages() internal {
-        uint8 length = 15;
-        for (uint8 i = 0; i < length; i++) {
-            if (i == 0) {
-                priceStruct[i] = tokenPriceUSDT;
-                stagePeriods[i] = block.timestamp;
-            } else if (i == 14) {
-                unchecked {
-                    priceStruct[i] = (priceStruct[i - 1] * 110) / 100;
-                }
-                stagePeriods[i] = stagePeriods[i - 1] + 4 days;
-            } else {
-                unchecked {
-                    priceStruct[i] = (priceStruct[i - 1] * 110) / 100;
-                }
-                stagePeriods[i] = stagePeriods[i - 1] + 5 days;
-            }
+        uint8 totalDays = 76;
+        uint8 period = 5;
+        uint8 shorterPeriodLength = 4;
+        uint lastPeriodDay = 7;
+        uint startDate = block.timestamp;
+        endDate = startDate + (totalDays * 1 days);
+        uint currentStartDate = startDate;
+        uint currentPrice = tokenPriceUSDT;
+
+        for (uint i = 0; i < 13; i++) {
+            stagePeriods.push(currentStartDate);
+            currentStartDate += period * 1 days;
+            priceStruct.push(currentPrice);
+            currentPrice = (currentPrice * 110) / 100;
         }
+        stagePeriods.push(currentStartDate);
+        currentStartDate += shorterPeriodLength * 1 days;
+        priceStruct.push(currentPrice);
+        currentPrice = (currentPrice * 110) / 100;
+        stagePeriods.push(currentStartDate);
+        currentStartDate += lastPeriodDay * 1 days;
+        priceStruct.push(currentPrice);
+        stagePeriods.push(currentStartDate);
     }
 
     function startSale(bool _isSaleStart) external onlyOwner {
+        if (isSaleStart == true) {
+            revert("Sale alredy had started");
+        }
         isSaleStart = _isSaleStart;
         initializeStages();
-        emit SaleStarded(_isSaleStart);
+        emit SaleStarted(_isSaleStart);
     }
 
-    function whichStage(uint8 _stage) public {
+    function whichStage(uint8 _stage) internal {
         for (uint8 i = _stage; i < priceStruct.length; i++) {
-            if (i == 14) {
-                if (
-                    purchaseTokenContract.balanceOf(address(this)) >=
-                    constantValue * i ||
-                    block.timestamp >= stagePeriods[i]
-                ) {
-                    stage = i + 1;
-                    tokenPriceUSDT = priceStruct[i];
-                } else {
-                    break;
-                }
+            if (
+                purchaseTokenContract.balanceOf(address(this)) >=
+                constantValue * i
+            ) {
+                stage = i + 1;
+                stagePeriods[i + 1] = 5 days + block.timestamp;
+                tokenPriceUSDT = priceStruct[i];
+            } else if (block.timestamp >= stagePeriods[i]) {
+                stage = i + 1;
+                tokenPriceUSDT = priceStruct[i];
             } else {
-                if (
-                    purchaseTokenContract.balanceOf(address(this)) >=
-                    constantValue * i ||
-                    block.timestamp >= stagePeriods[i]
-                ) {
-                    stage = i + 1;
-                    tokenPriceUSDT = priceStruct[i];
-                } else {
-                    break;
-                }
+                break;
             }
         }
     }
@@ -109,6 +109,13 @@ contract DoggyAiPresale is Ownable, ReentrancyGuard {
         uint256 balance = purchaseTokenContract.balanceOf(address(this));
         require(balance > 0, "No tokens to withdraw");
         purchaseTokenContract.safeTransfer(receiverAddress, balance);
+    }
+
+    function ownerWithdrawETH() external nonReentrant onlyOwner {
+        uint256 balanceContract = address(this).balance;
+        require(balanceContract > 0, "No tokens to withdraw");
+        (bool succes, ) = payable(msg.sender).call{value: balanceContract}("");
+        require(succes, "Transact reverted");
     }
 
     function ownerWithdrawTokens() external nonReentrant onlyOwner {
@@ -144,6 +151,7 @@ contract DoggyAiPresale is Ownable, ReentrancyGuard {
             weiPerUSDT,
             10 ** 6
         );
+        require(weiPerYourToken != 0, "Wei per token is zero");
         uint256 amountToken = (weiAmount / weiPerYourToken) * 10 ** 18;
         return amountToken;
     }
@@ -185,6 +193,7 @@ contract DoggyAiPresale is Ownable, ReentrancyGuard {
             amount <= tokenContract.balanceOf(address(this)),
             "Insufficient tokens in contract"
         );
+        // Sending funds to a contract instead of sending them directly to the owner can provide an additional layer of security and control over the funds.
         (bool succes, ) = address(this).call{value: msg.value}("");
         if (!succes) {
             revert("Transfer eth error");
@@ -224,6 +233,16 @@ contract DoggyAiPresale is Ownable, ReentrancyGuard {
 
         _tokensBought[msg.sender] += tokensAmount;
         emit BuyTokens(msg.sender, tokensAmount);
+    }
+
+    function getStagePeriod() public view returns (uint, uint) {
+        if (stage == 15) {
+            return (stagePeriods[stage] - 7 days, stagePeriods[stage]);
+        } else if (stage == 14) {
+            return (stagePeriods[stage] - 4 days, stagePeriods[stage]);
+        } else {
+            return (stagePeriods[stage] - 5 days, stagePeriods[stage]);
+        }
     }
 
     function toggleisSaleEnd(bool _isSaleEnd) public onlyOwner {

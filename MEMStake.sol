@@ -7,12 +7,13 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 contract DoggyAiStake is Ownable, ReentrancyGuard {
     IERC20 public stakingToken;
-    bool isEarlyWithdrawal;
+    bool public isEarlyWithdrawal;
     uint256 public minStake = 10 * 10 ** 18;
-    uint256 internal stakePeriod;
+    uint256 public stakePeriod;
     uint256 public totalStaked;
     uint public constantTotalFunds;
     uint public totalFund;
+    uint public rewardRate;
 
     event Staked(address indexed, uint256 amount);
     event Claimed(address indexed, uint256 amount);
@@ -32,7 +33,16 @@ contract DoggyAiStake is Ownable, ReentrancyGuard {
     }
 
     mapping(address => uint256) public userTotalStaked;
-    mapping(address => Stake[]) private stakes;
+    mapping(address => Stake[]) public stakes;
+
+    modifier _checkRewardRate() {
+        if (totalStaked == 0) {
+            rewardRate = ((totalFund / stakePeriod) / minStake);
+        } else {
+            rewardRate = ((totalFund / stakePeriod) / totalStaked);
+        }
+        _;
+    }
 
     constructor(
         address DoggyAi,
@@ -44,6 +54,7 @@ contract DoggyAiStake is Ownable, ReentrancyGuard {
         stakePeriod = _stakePeriod * 1 days;
         constantTotalFunds = 13800000000000000000000000000;
         totalFund = constantTotalFunds;
+        rewardRate = ((totalFund / stakePeriod) / 10);
     }
 
     function getStakes(
@@ -59,7 +70,6 @@ contract DoggyAiStake is Ownable, ReentrancyGuard {
     ) public view returns (uint256) {
         Stake storage userStake = stakes[userAddress][stakeIndex];
         uint256 elapsedSeconds = block.timestamp - userStake.lastClaimTimestamp;
-        uint rewardRate = ((totalFund / stakePeriod) / totalStaked);
         return (userStake.amount * elapsedSeconds * rewardRate);
     }
 
@@ -69,7 +79,7 @@ contract DoggyAiStake is Ownable, ReentrancyGuard {
         return stakes[userAddress];
     }
 
-    function stake(uint256 _amount) public {
+    function stake(uint256 _amount) public _checkRewardRate {
         require(
             _amount >= minStake,
             "The amount must be greater than minimum 10 tokens"
@@ -79,7 +89,6 @@ contract DoggyAiStake is Ownable, ReentrancyGuard {
         stakes[msg.sender].push(
             Stake(_amount, block.timestamp, block.timestamp)
         );
-
         require(
             stakingToken.transferFrom(msg.sender, address(this), _amount),
             "Token transfer failed"
@@ -115,11 +124,27 @@ contract DoggyAiStake is Ownable, ReentrancyGuard {
         require(isEarlyWithdrawal, "Early claim is not allowed");
         Stake[] memory userStakes = stakes[msg.sender];
         for (uint256 i; i < userStakes.length; i++) {
+            rewardRate = ((totalFund / stakePeriod) / totalStaked);
             claimReward(i);
         }
     }
 
-    function withdraw() public nonReentrant {
+    function claimAndStake() public {
+        require(isEarlyWithdrawal, "Early claim is not allowed");
+        Stake[] storage userStakes = stakes[msg.sender];
+        for (uint256 i; i < userStakes.length; i++) {
+            uint reward = calculateReward(msg.sender, i);
+            require(
+                reward >= minStake,
+                "The amount must be greater than minimum 10 tokens"
+            );
+            require(reward > 0, "No reward available");
+            require(reward <= totalFund, "Not enough funds in contract");
+            userStakes[i].amount += reward;
+        }
+    }
+
+    function withdraw() public nonReentrant _checkRewardRate {
         Stake[] storage userStake = stakes[msg.sender];
         uint i;
         for (i; i < userStake.length; i++) {
@@ -127,6 +152,7 @@ contract DoggyAiStake is Ownable, ReentrancyGuard {
                 revert("The amount must be greater than minimum 10 tokens");
             }
             require(isEarlyWithdrawal, "Early withdrawal is not allowed");
+            rewardRate = ((totalFund / stakePeriod) / totalStaked);
             uint256 rewardAmount = calculateReward(msg.sender, i);
             require(
                 stakingToken.transfer(
@@ -139,8 +165,8 @@ contract DoggyAiStake is Ownable, ReentrancyGuard {
             totalStaked -= userStake[i].amount;
             totalFund -= rewardAmount;
             userStake[i].amount = 0;
-            delete stakes[msg.sender];
             emit Withdrawed(msg.sender, userStake[i].amount + rewardAmount);
+            delete stakes[msg.sender];
         }
     }
 
@@ -164,13 +190,25 @@ contract DoggyAiStake is Ownable, ReentrancyGuard {
         setMinStake(minStake);
         constantTotalFunds = amountToRefil;
         totalFund = constantTotalFunds;
-        emit PoolRefild(
-            msg.sender,
-            amountToRefil,
-            isLock,
-            newStakePeriod,
-            newMinStake
-        );
+        if (totalStaked == 0) {
+            rewardRate = ((totalFund / stakePeriod) / minStake);
+            emit PoolRefild(
+                msg.sender,
+                amountToRefil,
+                isLock,
+                newStakePeriod,
+                newMinStake
+            );
+        } else {
+            rewardRate = ((totalFund / stakePeriod) / totalStaked);
+            emit PoolRefild(
+                msg.sender,
+                amountToRefil,
+                isLock,
+                newStakePeriod,
+                newMinStake
+            );
+        }
     }
 
     function toggleEarlyWithdrawal(bool _isEralyWithdrawal) public onlyOwner {
