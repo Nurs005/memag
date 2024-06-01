@@ -47,12 +47,13 @@ contract DoggyAiStake is Ownable, ReentrancyGuard {
     constructor(
         address DoggyAi,
         address initialOwner,
-        uint256 _stakePeriod
+        uint256 _stakePeriod,
+        uint amountToFill
     ) Ownable(initialOwner) {
         stakingToken = IERC20(DoggyAi);
         isEarlyWithdrawal = false;
         stakePeriod = _stakePeriod * 1 days;
-        constantTotalFunds = 13800000000000000000000000000;
+        constantTotalFunds = amountToFill;
         totalFund = constantTotalFunds;
         rewardRate = ((totalFund / stakePeriod) / 10);
     }
@@ -97,7 +98,7 @@ contract DoggyAiStake is Ownable, ReentrancyGuard {
         emit Staked(msg.sender, _amount);
     }
 
-    function calculatePoolProcentage() public view returns (uint256) {
+    function calculatePoolProcentage() external view returns (uint256) {
         return (totalFund / constantTotalFunds) * 100;
     }
 
@@ -129,7 +130,7 @@ contract DoggyAiStake is Ownable, ReentrancyGuard {
         }
     }
 
-    function claimAndStake() public {
+    function claimAndStake() public nonReentrant {
         require(isEarlyWithdrawal, "Early claim is not allowed");
         Stake[] storage userStakes = stakes[msg.sender];
         for (uint256 i; i < userStakes.length; i++) {
@@ -170,7 +171,7 @@ contract DoggyAiStake is Ownable, ReentrancyGuard {
         }
     }
 
-    function refilPool(
+    function refillPool(
         uint256 amountToRefil,
         bool isLock,
         uint256 newStakePeriod,
